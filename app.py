@@ -388,12 +388,20 @@ def main():
                 st.markdown("<p style='font-size:0.85rem;font-weight:700;color:#065F46;margin-bottom:8px;'>⏱️ SESSION DURATION (MAX 60 MIN)</p>", unsafe_allow_html=True)
                 col_m, col_s = st.columns(2)
                 with col_m:
-                    st.session_state.cfg_duration_mins = st.number_input(
-                        "MINUTES", min_value=0, max_value=60, value=int(st.session_state.cfg_duration_mins), step=1
+                    st.number_input(
+                        "MINUTES",
+                        min_value=0,
+                        max_value=60,
+                        step=1,
+                        key="cfg_duration_mins",
                     )
                 with col_s:
-                    st.session_state.cfg_duration_secs = st.number_input(
-                        "SECONDS", min_value=0, max_value=59, value=int(st.session_state.cfg_duration_secs), step=5
+                    st.number_input(
+                        "SECONDS",
+                        min_value=0,
+                        max_value=59,
+                        step=5,
+                        key="cfg_duration_secs",
                     )
 
                 total_seconds = min(3600, (st.session_state.cfg_duration_mins * 60) + st.session_state.cfg_duration_secs)
