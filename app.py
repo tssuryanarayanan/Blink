@@ -592,7 +592,24 @@ def main():
         with video_col:
             with st.container(border=True):
                 video_hud_placeholder = st.empty()
-                st_frame = st.empty()
+                webrtc_ctx = webrtc_streamer(
+                    key="blink-camera",
+                    mode=WebRtcMode.SENDRECV,
+                    video_processor_factory=BlinkVideoProcessor,
+                    media_stream_constraints={"video": True, "audio": False},
+                    video_html_attrs={
+                        "autoPlay": True,
+                        "controls": False,
+                        "style": {
+                            "width": "100%",
+                            "height": "500px",
+                            "objectFit": "cover",
+                            "backgroundColor": "#0F172A",
+                            "borderRadius": "14px",
+                        },
+                    },
+                    async_processing=True,
+                )
 
         with stats_col:
             with st.container(border=True):
@@ -630,26 +647,8 @@ def main():
                     st.session_state.stage = "configure"
                     st.rerun()
 
-        # Browser camera processing through WebRTC. OpenCV never tries to open
-        # a camera on the Streamlit server.
+        # Refresh the dashboard without reopening the browser camera stream.
         st_autorefresh(interval=1000, key="monitoring_refresh")
-        webrtc_ctx = webrtc_streamer(
-            key="blink-camera",
-            mode=WebRtcMode.SENDRECV,
-            video_processor_factory=BlinkVideoProcessor,
-            media_stream_constraints={"video": True, "audio": False},
-            video_html_attrs={
-                "style": {
-                    "width": "100%",
-                    "height": "500px",
-                    "objectFit": "contain",
-                    "backgroundColor": "#0F172A",
-                    "borderRadius": "14px",
-                }
-            },
-            async_processing=True,
-        )
-
         processor = webrtc_ctx.video_processor
         if processor is not None:
             st.session_state.session_stats = processor.stats_engine
