@@ -1,7 +1,7 @@
 streamlit>=1.38,<2.0
-opencv-python-headless==4.10.0.84
-mediapipe==0.10.14
+opencv-contrib-python==4.10.0.84
+mediapipe==0.10.35
 plotly>=5.20,<6.0
 pandas>=2.0,<3.0
-numpy<2.0.0
+numpy>=2.0,<3.0
 google-genai>=1.0.0
