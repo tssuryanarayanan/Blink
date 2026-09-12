@@ -180,6 +180,74 @@ st.markdown(
         font-weight: 800 !important;
         color: #065F46 !important;
     }
+
+    @keyframes blinktrack-reveal {
+        from {
+            opacity: 0;
+            transform: translateY(14px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes blinktrack-float {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-5px); }
+    }
+
+    @keyframes blinktrack-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.18); }
+        50% { box-shadow: 0 0 0 7px rgba(16, 185, 129, 0); }
+    }
+
+    @keyframes blinktrack-shimmer {
+        0% { opacity: 0.72; }
+        50% { opacity: 1; }
+        100% { opacity: 0.72; }
+    }
+
+    .stApp > div {
+        animation: blinktrack-reveal 0.55s ease-out both;
+    }
+
+    .stApp svg {
+        animation: blinktrack-float 5s ease-in-out infinite;
+    }
+
+    .monitoring-topbar,
+    .glass-hud {
+        animation: blinktrack-reveal 0.45s ease-out both;
+    }
+
+    .status-pill-live {
+        animation: blinktrack-pulse 2.2s ease-in-out infinite;
+    }
+
+    div[data-testid="stMetric"] {
+        animation: blinktrack-reveal 0.5s ease-out both;
+        transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+    }
+
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 18px rgba(16, 185, 129, 0.12) !important;
+    }
+
+    .stButton > button:active,
+    div[data-testid="stDownloadButton"] > button:active {
+        transform: scale(0.98) !important;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            scroll-behavior: auto !important;
+            transition-duration: 0.01ms !important;
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True,
