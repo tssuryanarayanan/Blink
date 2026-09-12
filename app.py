@@ -310,6 +310,8 @@ def create_donut_chart(score: float, grade: str) -> go.Figure:
     fig.update_layout(
         showlegend=False,
         height=190,
+        uirevision="performance-index",
+        transition_duration=450,
         margin=dict(l=10, r=10, t=10, b=10),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -596,8 +598,13 @@ def main():
             with st.container(border=True):
                 st.markdown("<p style='font-size:0.82rem;font-weight:700;color:#64748B;margin:0 0 6px 0;text-transform:uppercase;'>Performance Index</p>", unsafe_allow_html=True)
                 gauge_placeholder = st.empty()
+                initial_score, initial_grade = 100.0, "A+"
+                if st.session_state.session_stats is not None:
+                    initial_score, initial_grade = calculate_performance_index(
+                        st.session_state.session_stats.compute_metrics()
+                    )
                 gauge_placeholder.plotly_chart(
-                    create_donut_chart(100.0, "A+"),
+                    create_donut_chart(initial_score, initial_grade),
                     key="monitoring_donut_init",
                     use_container_width=True,
                 )
@@ -631,6 +638,15 @@ def main():
             mode=WebRtcMode.SENDRECV,
             video_processor_factory=BlinkVideoProcessor,
             media_stream_constraints={"video": True, "audio": False},
+            video_html_attrs={
+                "style": {
+                    "width": "100%",
+                    "height": "500px",
+                    "objectFit": "contain",
+                    "backgroundColor": "#0F172A",
+                    "borderRadius": "14px",
+                }
+            },
             async_processing=True,
         )
 
@@ -655,12 +671,6 @@ def main():
             )
 
             live_metrics = processor.stats_engine.compute_metrics()
-            score, grade = calculate_performance_index(live_metrics)
-            gauge_placeholder.plotly_chart(
-                create_donut_chart(score, grade),
-                key="live_gauge",
-                use_container_width=True,
-            )
             kpi_bpm.metric("Blinks / Min", f"{live_metrics['bpm']}")
             kpi_count.metric("Total Blinks", f"{live_metrics['total_blinks']}")
             kpi_dur.metric("Avg Duration", f"{live_metrics['avg_duration']}s")
