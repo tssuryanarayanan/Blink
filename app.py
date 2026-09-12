@@ -1,11 +1,15 @@
 import io
+import threading
 import time
 import platform
+import av
 import cv2
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
+from streamlit_webrtc import VideoProcessorBase, WebRtcMode, webrtc_streamer
 
 from blink_detector import BlinkDetector
 from blink_stats import BlinkStatsEngine
@@ -385,6 +389,57 @@ def draw_hud_overlay(
     return frame
 
 
+class BlinkVideoProcessor(VideoProcessorBase):
+    """Process browser camera frames in the WebRTC worker thread."""
+
+    def __init__(self):
+        self.detector = None
+        self.stats_engine = BlinkStatsEngine(session_start_time=time.time())
+        self.latest = {
+            "ear": 0.0,
+            "face_detected": False,
+            "is_blinking": False,
+        }
+        self.lock = threading.Lock()
+
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        image = frame.to_ndarray(format="bgr24")
+        display_frame = cv2.flip(image, 1)
+        rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+
+        if self.detector is None:
+            self.detector = BlinkDetector(ear_threshold=0.21, smoothing_window=3)
+
+        detection_result = self.detector.process_frame(
+            rgb_frame,
+            timestamp_s=time.time(),
+        )
+        completed_blink = detection_result["blink_event"]
+        if completed_blink:
+            self.stats_engine.register_blink(completed_blink)
+
+        with self.lock:
+            self.latest = {
+                "ear": detection_result["ear"],
+                "face_detected": detection_result["face_detected"],
+                "is_blinking": detection_result["is_blinking"],
+            }
+
+        annotated_frame = draw_hud_overlay(
+            display_frame,
+            detection_result["ear"],
+            0.21,
+            detection_result["is_blinking"],
+            detection_result["face_detected"],
+        )
+        return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
+
+    def close(self):
+        if self.detector is not None:
+            self.detector.close()
+            self.detector = None
+
+
 def main():
     EAR_THRESHOLD = 0.21
 
@@ -395,6 +450,8 @@ def main():
         st.session_state.session_stats = None
     if "final_report_ready" not in st.session_state:
         st.session_state.final_report_ready = False
+    if "monitoring_started_at" not in st.session_state:
+        st.session_state.monitoring_started_at = None
 
     # Stored timer defaults
     if "cfg_duration_mins" not in st.session_state:
@@ -487,6 +544,7 @@ def main():
                     if st.button("Begin Monitoring", use_container_width=True, type="primary"):
                         st.session_state.stage = "monitoring"
                         st.session_state.final_report_ready = False
+                        st.session_state.monitoring_started_at = time.time()
                         st.rerun()
                 with btn_col2:
                     if st.button("Back", use_container_width=True):
@@ -500,6 +558,9 @@ def main():
         total_seconds = min(3600, (st.session_state.cfg_duration_mins * 60) + st.session_state.cfg_duration_secs)
         if total_seconds == 0:
             total_seconds = 60
+        started_at = st.session_state.monitoring_started_at or time.time()
+        remaining_seconds = max(0, total_seconds - (time.time() - started_at))
+        remaining_mins, remaining_secs = divmod(int(remaining_seconds), 60)
 
         # Top Bar
         timer_placeholder = st.empty()
@@ -517,7 +578,7 @@ def main():
                     <span class="status-pill-live">🔴 LIVE</span>
                 </div>
                 <div style="font-weight: 700; color: #065F46; font-size: 0.95rem;">
-                    ⏱️ Time Remaining: {total_seconds // 60:02d}:{total_seconds % 60:02d}
+                    ⏱️ Time Remaining: {remaining_mins:02d}:{remaining_secs:02d}
                 </div>
             </div>
             """,
@@ -562,118 +623,54 @@ def main():
                     st.session_state.stage = "configure"
                     st.rerun()
 
-        # Camera & State Ingestion Loop
-        if not st.session_state.final_report_ready:
-            stats_engine = BlinkStatsEngine(session_start_time=time.time())
-            st.session_state.session_stats = stats_engine
+        # Browser camera processing through WebRTC. OpenCV never tries to open
+        # a camera on the Streamlit server.
+        st_autorefresh(interval=1000, key="monitoring_refresh")
+        webrtc_ctx = webrtc_streamer(
+            key="blink-camera",
+            mode=WebRtcMode.SENDRECV,
+            video_processor_factory=BlinkVideoProcessor,
+            media_stream_constraints={"video": True, "audio": False},
+            async_processing=True,
+        )
 
-            detector = BlinkDetector(
-                ear_threshold=EAR_THRESHOLD,
-                smoothing_window=3,
+        processor = webrtc_ctx.video_processor
+        if processor is not None:
+            st.session_state.session_stats = processor.stats_engine
+            with processor.lock:
+                live_state = processor.latest.copy()
+
+            status_color = "#EF4444" if live_state["is_blinking"] else "#10B981"
+            status_text = "EYES CLOSED" if live_state["is_blinking"] else "EYES OPEN"
+            video_hud_placeholder.markdown(
+                f"""
+                <div class="glass-hud">
+                    <span style="font-weight:700;font-size:0.85rem;color:{status_color};">STATUS: {status_text}</span>
+                    <span style="font-weight:600;font-size:0.85rem;color:#1E293B;">
+                        EAR: <b style="color:{status_color};">{live_state["ear"]:.3f}</b>
+                    </span>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
-            backend = cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_ANY
-            cap = cv2.VideoCapture(0, backend)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            live_metrics = processor.stats_engine.compute_metrics()
+            score, grade = calculate_performance_index(live_metrics)
+            gauge_placeholder.plotly_chart(
+                create_donut_chart(score, grade),
+                key="live_gauge",
+                use_container_width=True,
+            )
+            kpi_bpm.metric("Blinks / Min", f"{live_metrics['bpm']}")
+            kpi_count.metric("Total Blinks", f"{live_metrics['total_blinks']}")
+            kpi_dur.metric("Avg Duration", f"{live_metrics['avg_duration']}s")
+            kpi_streak.metric("No-Blink Streak", f"{live_metrics['max_staring_streak']}s")
 
-            start_time = time.time()
-            frame_counter = 0
-
-            try:
-                while st.session_state.stage == "monitoring":
-                    elapsed = time.time() - start_time
-                    remaining = max(0, total_seconds - elapsed)
-
-                    mins, secs = divmod(int(remaining), 60)
-                    timer_placeholder.markdown(
-                        f"""
-                        <div class="monitoring-topbar">
-                            <div style="display: flex; align-items: center; gap: 10px;">
-                                <span style="font-size: 1.4rem;">👁️</span>
-                                <div>
-                                    <span style="font-weight: 800; color: #065F46; font-size: 1.1rem; display: block; line-height: 1.2;">BlinkTrack Live Console</span>
-                                    <span style="color: #64748B; font-size: 0.78rem; font-weight: 500;">Clinical Edge AI Ocular Telemetry</span>
-                                </div>
-                            </div>
-                            <div>
-                                <span class="status-pill-live">🔴 LIVE</span>
-                            </div>
-                            <div style="font-weight: 700; color: #065F46; font-size: 0.95rem;">
-                                ⏱️ Time Remaining: {mins:02d}:{secs:02d}
-                            </div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-
-                    if elapsed >= total_seconds:
-                        st.balloons()
-                        break
-
-                    ret, frame = cap.read()
-                    if not ret:
-                        st.error("Hardware Camera Stream Offline or Disconnected.")
-                        break
-
-                    frame_counter += 1
-                    display_frame = cv2.flip(frame, 1)
-                    rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
-
-                    detection_result = detector.process_frame(rgb_frame, timestamp_s=time.time())
-                    smoothed_ear = detection_result["ear"]
-                    face_detected = detection_result["face_detected"]
-                    is_blinking = detection_result["is_blinking"]
-                    completed_blink = detection_result["blink_event"]
-
-                    if completed_blink:
-                        stats_engine.register_blink(completed_blink)
-
-                    status_color = "#EF4444" if is_blinking else "#10B981"
-                    status_text = "EYES CLOSED" if is_blinking else "EYES OPEN"
-
-                    video_hud_placeholder.markdown(
-                        f"""
-                        <div class="glass-hud">
-                            <span style="font-weight:700;font-size:0.85rem;color:{status_color};">STATUS: {status_text}</span>
-                            <span style="font-weight:600;font-size:0.85rem;color:#1E293B;">
-                                EAR: <b style="color:{status_color};">{smoothed_ear:.3f}</b>
-                            </span>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-
-                    annotated_frame = draw_hud_overlay(
-                        display_frame,
-                        smoothed_ear,
-                        EAR_THRESHOLD,
-                        is_blinking,
-                        face_detected,
-                    )
-
-                    st_frame.image(annotated_frame, channels="BGR", use_container_width=True)
-
-                    if frame_counter % 8 == 0:
-                        live_metrics = stats_engine.compute_metrics()
-                        score, grade = calculate_performance_index(live_metrics)
-
-                        gauge_placeholder.plotly_chart(
-                            create_donut_chart(score, grade),
-                            key=f"live_gauge_{frame_counter}",
-                            use_container_width=True,
-                        )
-                        kpi_bpm.metric("Blinks / Min", f"{live_metrics['bpm']}")
-                        kpi_count.metric("Total Blinks", f"{live_metrics['total_blinks']}")
-                        kpi_dur.metric("Avg Duration", f"{live_metrics['avg_duration']}s")
-                        kpi_streak.metric("No-Blink Streak", f"{live_metrics['max_staring_streak']}s")
-
-            finally:
-                cap.release()
-                detector.close()
-                st.session_state.final_report_ready = True
-                video_hud_placeholder.empty()
+        if stop_clicked:
+            if processor is not None:
+                st.session_state.session_stats = processor.stats_engine
+            st.session_state.final_report_ready = True
+            st.rerun()
 
         # Diagnostic Report Screen
         if st.session_state.final_report_ready and st.session_state.session_stats:
