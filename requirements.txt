@@ -1,5 +1,5 @@
 streamlit>=1.38
-opencv-python>=4.9
+opencv-python-headless
 mediapipe>=0.10.14
 plotly>=5.20
 pandas>=2.0
