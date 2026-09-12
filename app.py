@@ -666,7 +666,7 @@ def main():
                 st.markdown("<div style='height: 18px;'></div>", unsafe_allow_html=True)
                 stop_clicked = st.button("Stop Session", key="btn_stop_live", use_container_width=True)
 
-        # Refresh only after the browser camera is active, avoiding idle reruns.
+        # Poll briefly while the browser permission/start handshake completes.
         processor = webrtc_ctx.video_processor
         camera_playing = webrtc_ctx.state.playing
         if camera_playing and processor is not None and started_at is None:
@@ -679,8 +679,14 @@ def main():
             started_at is not None
             and time.time() - started_at >= total_seconds
         )
-        if camera_playing and not session_expired:
-            st_autorefresh(interval=1000, key="monitoring_refresh")
+        if not session_expired and not st.session_state.final_report_ready:
+            st_autorefresh(
+                interval=1000 if camera_playing else 500,
+                key="monitoring_refresh",
+            )
+
+        if not camera_playing and not session_expired:
+            st.info("Allow camera access, then click START in the video panel to begin the timer.")
 
         if processor is not None and camera_playing:
             st.session_state.session_stats = processor.stats_engine
