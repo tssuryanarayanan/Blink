@@ -451,6 +451,11 @@ class BlinkVideoProcessor(VideoProcessorBase):
             self.detector = None
 
 
+def rerun_after_camera_change():
+    """Refresh Streamlit when the browser camera starts or stops."""
+    st.rerun()
+
+
 def main():
     EAR_THRESHOLD = 0.21
 
@@ -574,10 +579,6 @@ def main():
         remaining_seconds = total_seconds if started_at is None else max(
             0, total_seconds - (time.time() - started_at)
         )
-        session_expired_before_render = (
-            started_at is not None
-            and time.time() - started_at >= total_seconds
-        )
         remaining_mins, remaining_secs = divmod(int(remaining_seconds), 60)
 
         # Top Bar
@@ -626,10 +627,7 @@ def main():
                             "borderRadius": "14px",
                         },
                     },
-                    desired_playing_state=(
-                        not st.session_state.final_report_ready
-                        and not session_expired_before_render
-                    ),
+                    on_change=rerun_after_camera_change,
                     async_processing=True,
                 )
 
