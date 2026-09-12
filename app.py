@@ -404,6 +404,15 @@ class BlinkVideoProcessor(VideoProcessorBase):
         }
         self.lock = threading.Lock()
 
+    def reset_session(self):
+        with self.lock:
+            self.stats_engine = BlinkStatsEngine(session_start_time=time.time())
+            self.latest = {
+                "ear": 0.0,
+                "face_detected": False,
+                "is_blinking": False,
+            }
+
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         image = frame.to_ndarray(format="bgr24")
         display_frame = cv2.flip(image, 1)
@@ -546,7 +555,8 @@ def main():
                     if st.button("Begin Monitoring", use_container_width=True, type="primary"):
                         st.session_state.stage = "monitoring"
                         st.session_state.final_report_ready = False
-                        st.session_state.monitoring_started_at = time.time()
+                        st.session_state.monitoring_started_at = None
+                        st.session_state.session_stats = None
                         st.rerun()
                 with btn_col2:
                     if st.button("Back", use_container_width=True):
@@ -560,8 +570,14 @@ def main():
         total_seconds = min(3600, (st.session_state.cfg_duration_mins * 60) + st.session_state.cfg_duration_secs)
         if total_seconds == 0:
             total_seconds = 60
-        started_at = st.session_state.monitoring_started_at or time.time()
-        remaining_seconds = max(0, total_seconds - (time.time() - started_at))
+        started_at = st.session_state.monitoring_started_at
+        remaining_seconds = total_seconds if started_at is None else max(
+            0, total_seconds - (time.time() - started_at)
+        )
+        session_expired_before_render = (
+            started_at is not None
+            and time.time() - started_at >= total_seconds
+        )
         remaining_mins, remaining_secs = divmod(int(remaining_seconds), 60)
 
         # Top Bar
@@ -600,6 +616,8 @@ def main():
                     video_html_attrs={
                         "autoPlay": True,
                         "controls": False,
+                        "width": "100%",
+                        "height": 500,
                         "style": {
                             "width": "100%",
                             "height": "500px",
@@ -608,6 +626,10 @@ def main():
                             "borderRadius": "14px",
                         },
                     },
+                    desired_playing_state=(
+                        not st.session_state.final_report_ready
+                        and not session_expired_before_render
+                    ),
                     async_processing=True,
                 )
 
@@ -643,14 +665,24 @@ def main():
 
                 st.markdown("<div style='height: 18px;'></div>", unsafe_allow_html=True)
                 stop_clicked = st.button("Stop Session", key="btn_stop_live", use_container_width=True)
-                if stop_clicked:
-                    st.session_state.stage = "configure"
-                    st.rerun()
 
-        # Refresh the dashboard without reopening the browser camera stream.
-        st_autorefresh(interval=1000, key="monitoring_refresh")
+        # Refresh only after the browser camera is active, avoiding idle reruns.
         processor = webrtc_ctx.video_processor
-        if processor is not None:
+        camera_playing = webrtc_ctx.state.playing
+        if camera_playing and processor is not None and started_at is None:
+            processor.reset_session()
+            st.session_state.monitoring_started_at = time.time()
+            started_at = st.session_state.monitoring_started_at
+            st.session_state.session_stats = processor.stats_engine
+
+        session_expired = (
+            started_at is not None
+            and time.time() - started_at >= total_seconds
+        )
+        if camera_playing and not session_expired:
+            st_autorefresh(interval=1000, key="monitoring_refresh")
+
+        if processor is not None and camera_playing:
             st.session_state.session_stats = processor.stats_engine
             with processor.lock:
                 live_state = processor.latest.copy()
@@ -675,7 +707,7 @@ def main():
             kpi_dur.metric("Avg Duration", f"{live_metrics['avg_duration']}s")
             kpi_streak.metric("No-Blink Streak", f"{live_metrics['max_staring_streak']}s")
 
-        if stop_clicked:
+        if stop_clicked or session_expired:
             if processor is not None:
                 st.session_state.session_stats = processor.stats_engine
             st.session_state.final_report_ready = True
